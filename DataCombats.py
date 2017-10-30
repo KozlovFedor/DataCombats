@@ -81,13 +81,13 @@ for id in files_df_exists.index:
     features = features.drop(['Time'], axis=1)
     features['id'] = ind
     features = features.iloc[::7,:]
-    if ind < 100:
+    if ind < 200:
         if ind == 0:
             Train_features = features
         else:
             Train_features = Train_features.append(features)
-    elif ind < 120:
-        if ind == 100:
+    elif ind < 240:
+        if ind == 200:
             Test_features = features
         else:
             Test_features = Test_features.append(features)
@@ -102,6 +102,7 @@ from sklearn.model_selection import KFold
 from sklearn.model_selection import cross_val_score
 from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import train_test_split
+import datetime
 
 cv = KFold(n_splits=5, shuffle=True)
 
@@ -111,16 +112,15 @@ Train_features = Train_features.loc[:, 'Agreement score':]
 X = np.array(Train_features)
 scaler = StandardScaler()
 X_scaled = scaler.fit_transform(X)
-
-clf = {}
-
+'''
 for emotion in Y_train:
-    clf[emotion] = LogisticRegression()
+    start_time = datetime.datetime.now()
+    clf = LogisticRegression()
     #X_train, X_test, y_train, y_test = train_test_split(X_scaled, np.array(Y[emoution]))
     #clf.fit(X_train, y_train)
-    score = cross_val_score(clf[emotion], X_scaled, np.array(Y_train[emotion]), scoring='roc_auc', cv=cv)
+    score = cross_val_score(clf, X_scaled, np.array(Y_train[emotion]), scoring='roc_auc', cv=cv)
     #pred = clf.predict_proba(X_test)[:, 1]
-    print(emotion, score.mean())#roc_auc_score(y_test, pred))
+    print(emotion, score.mean(), 'Time:', datetime.datetime.now() - start_time)#roc_auc_score(y_test, pred))'''
 
 Y_test = Test_features.loc[:,'Anger':'Neutral']
 Test_features = Test_features.loc[:, 'Agreement score':]
@@ -128,11 +128,49 @@ Test_features = Test_features.loc[:, 'Agreement score':]
 X_test = np.array(Test_features)
 X_test_scaled = scaler.fit_transform(X_test)
 pred_emotions = {}
+'''
 for emotion in Y_test:
-    clf = LogisticRegression(C=0.1)
+    start_time = datetime.datetime.now()
+    clf = LogisticRegression()
     clf.fit(X_scaled, np.array(Y_train[emotion]))
     pred_emotions[emotion] = clf.predict_proba(X_test_scaled)[:, 1]
-    print(emotion, roc_auc_score(Y_test[emotion], pred_emotions[emotion]))
+    print(emotion, roc_auc_score(Y_test[emotion], pred_emotions[emotion]), 'Time:', datetime.datetime.now() - start_time)'''
+
+predictions = pandas.DataFrame(pred_emotions)
+
+def get_accuracy_score(y, prediction):
+    acc_score = 0.0
+    ind = 0
+    total = 0
+    for index, row in prediction.iterrows():
+        curr_max, ind_max = 0.0, ''
+        for em in prediction.columns:
+            if row[em] > curr_max:
+                curr_max = row[em]
+                ind_max = em
+        if Test_features.iloc[ind,:]['Agreement score'] > 0.6:
+            acc_score += y.iloc[ind,:][ind_max]
+            total += 1
+        ind += 1
+    
+    return acc_score / total
+
+def get_multiclass_target(y):
+    res = pandas.DataFrame()
+    d = {'Anger':0, 'Sad':1, 'Disgust':2, 'Happy':3, 'Scared':4, 'Neutral':5}
+    for em in y:
+        res[em] = y[em] * d[em]
+    return res.sum(axis=1)
+
+Y_multiclass_train = get_multiclass_target(Y_train)
+start_time = datetime.datetime.now()
+clf = LogisticRegression(verbose=True)
+clf.fit(X_scaled, np.array(Y_multiclass_train))
+pred_emotions = clf.predict_proba(X_test_scaled)
+predictions = pandas.DataFrame(pred_emotions)
+print('Time:', datetime.datetime.now() - start_time)
+names = {0:'Anger', 1:'Sad', 2:'Disgust', 3:'Happy', 4:'Scared', 5:'Neutral'}
+predictions = predictions.rename(columns=names)
 '''
 x_range = range(0, len(Y_test))
 for emotion in Y_test:
