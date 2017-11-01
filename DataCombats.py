@@ -80,7 +80,8 @@ for id in files_df_exists.index:
     features = get_features_for_file_name(id)
     features = features.drop(['Time'], axis=1)
     features['id'] = ind
-    features = features.iloc[::7,:]
+    #features = features.iloc[::7,:]
+    features = features[features['Agreement score'] > 0.6]
     if ind < 200:
         if ind == 0:
             Train_features = features
@@ -107,7 +108,7 @@ import datetime
 cv = KFold(n_splits=5, shuffle=True)
 
 Y_train = Train_features.loc[:,'Anger':'Neutral']
-Train_features = Train_features.loc[:, 'Agreement score':]
+Train_features = Train_features.loc[:, 'Loudness_sma3':]
 
 X = np.array(Train_features)
 scaler = StandardScaler()
@@ -123,7 +124,8 @@ for emotion in Y_train:
     print(emotion, score.mean(), 'Time:', datetime.datetime.now() - start_time)#roc_auc_score(y_test, pred))'''
 
 Y_test = Test_features.loc[:,'Anger':'Neutral']
-Test_features = Test_features.loc[:, 'Agreement score':]
+Test_features_agreement = Test_features.loc[:, 'Agreement score']
+Test_features = Test_features.loc[:, 'Loudness_sma3':]
 
 X_test = np.array(Test_features)
 X_test_scaled = scaler.fit_transform(X_test)
@@ -148,7 +150,7 @@ def get_accuracy_score(y, prediction):
             if row[em] > curr_max:
                 curr_max = row[em]
                 ind_max = em
-        if Test_features.iloc[ind,:]['Agreement score'] > 0.6:
+        if Test_features_agreement.iloc[ind] > 0.6:
             acc_score += y.iloc[ind,:][ind_max]
             total += 1
         ind += 1
@@ -163,14 +165,16 @@ def get_multiclass_target(y):
     return res.sum(axis=1)
 
 Y_multiclass_train = get_multiclass_target(Y_train)
-start_time = datetime.datetime.now()
-clf = LogisticRegression(verbose=True)
-clf.fit(X_scaled, np.array(Y_multiclass_train))
-pred_emotions = clf.predict_proba(X_test_scaled)
-predictions = pandas.DataFrame(pred_emotions)
-print('Time:', datetime.datetime.now() - start_time)
 names = {0:'Anger', 1:'Sad', 2:'Disgust', 3:'Happy', 4:'Scared', 5:'Neutral'}
-predictions = predictions.rename(columns=names)
+for C in [10**p for p in range(-4, 1)]:
+    start_time = datetime.datetime.now()
+    clf = LogisticRegression(C=C, random_state=42)
+    clf.fit(X_scaled, np.array(Y_multiclass_train))
+    pred_emotions = clf.predict_proba(X_test_scaled)
+    predictions = pandas.DataFrame(pred_emotions)
+    print('C=', C, 'Time:', datetime.datetime.now() - start_time)
+    predictions = predictions.rename(columns=names)
+    print(get_accuracy_score(Y_test, predictions))
 '''
 x_range = range(0, len(Y_test))
 for emotion in Y_test:
