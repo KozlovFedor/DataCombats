@@ -9,6 +9,8 @@ from sklearn.model_selection import KFold, cross_val_score, train_test_split
 from sklearn.metrics import roc_auc_score
 import datetime
 
+RANDOM_SEED = 42
+
 def get_all_exists_dataframes(files_df):
     """
         Возвращаем таблицу, где для для файлов(files_df) присутствуют все группы признаков (audio, eyes, face_nn, kinect) 
@@ -161,6 +163,37 @@ def plot_pred(x, y, y_pred, xlabel, ylabel):
     plt.ylabel(ylabel)
     plt.show()
 
+def make_id_from_filename(file_name):
+    """
+        Convert file name to number. Assuming that file name has format: 'id*.csv'
+    """
+    return int(file_name[2:-4], 16)
+
+def make_features_df_for_ids(ids, agreement_score=0.0, verbose=False):
+    """
+        Makes dataframe from list of @ids using only rows, where Agreement score >= @agreement_score
+    """
+    if verbose:
+        print('Start make_features_df_for_ids. Total files to process:', len(ids))
+    start_time = datetime.datetime.now()
+    res = pandas.DataFrame()
+    ind = 0
+    for file_name in ids:
+        # Получаем все признаки в куче
+        features = get_features_for_file_name(directory_path, file_name, template_df)
+        features = features.drop(['Time'], axis=1)
+        features['id'] = make_id_from_filename(file_name)
+        #features = features.iloc[::7,:]
+        features = features[features['Agreement score'] >= agreement_score]
+        if ind > 0:
+            res = res.append(features)
+        else:
+            res = features
+        ind += 1
+    if verbose:
+        print('Done. Total time:', datetime.datetime.now() - start_time)
+    return res
+
 data_type_names= ['audio', 'eyes', 'face_nn', 'kinect', 'labels']
 x_type_names = ['audio', 'eyes', 'face_nn', 'kinect']
 
@@ -178,32 +211,13 @@ files_to_process = get_all_exists_dataframes(files_df) # выбираем фай
 template_df = get_template_dataframe(directory_path, files_df, data_type_names)
 
 # Формируем тестовую и тренировочную выборки
-Train_features = pandas.DataFrame()
-Test_features = pandas.DataFrame()
-ind = 0
-for file_name in files_to_process.index:
-    # Получаем все признаки в куче
-    features = get_features_for_file_name(directory_path, file_name, template_df)
-    features = features.drop(['Time'], axis=1)
-    features['id'] = ind
-    #features = features.iloc[::7,:]
-    features = features[features['Agreement score'] > 0.6]
-    if ind < 10: #200
-        if ind == 0:
-            Train_features = features
-        else:
-            Train_features = Train_features.append(features)
-    elif ind < 14: #240
-        if ind == 10: #200
-            Test_features = features
-        else:
-            Test_features = Test_features.append(features)
-    else:
-        break
-    print(ind)
-    ind += 1
 
-cv = KFold(n_splits=5, shuffle=True)
+Train_ids, Test_ids = train_test_split(files_df.index, random_state=RANDOM_SEED)
+
+Train_features = make_features_df_for_ids(Train_ids, agreement_score=0.6, verbose=True)
+Test_features = make_features_df_for_ids(Test_ids, agreement_score=0.6, verbose=True)
+
+#cv = KFold(n_splits=5, shuffle=True)
 columns_objects = ['Anger', 'Sad', 'Disgust', 'Happy', 'Scared', 'Neutral']
 columns_features = [col for col in Train_features.columns if col not in columns_objects]
 
@@ -266,9 +280,9 @@ def get_multiclass_target(y):
 
 Y_multiclass_train = get_multiclass_target(Y_train)
 names = {0:'Anger', 1:'Sad', 2:'Disgust', 3:'Happy', 4:'Scared', 5:'Neutral'}
-for C in [10**p for p in range(-4, 1)]:
+for C in [10**p for p in range(-2, 0)]:
     start_time = datetime.datetime.now()
-    clf = LogisticRegression(C=C, random_state=42)
+    clf = LogisticRegression(C=C, random_state=RANDOM_SEED)
     clf.fit(X_scaled, np.array(Y_multiclass_train))
     pred_emotions = clf.predict_proba(X_test_scaled)
     predictions = pandas.DataFrame(pred_emotions)
