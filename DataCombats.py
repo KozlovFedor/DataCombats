@@ -73,7 +73,7 @@ def merge_all_features(featureList, template_df):
     res = pandas.DataFrame()       
     if template_df is not None:
         # если был передан шаблон
-        res = pandas.DataFrame(np.zeros((len(featureList[0].index), len(template_df.columns))), columns=template_df.columns)
+        res = pandas.DataFrame(np.empty((len(featureList[0].index), len(template_df.columns))).fill(np.nan), columns=template_df.columns)        
         res['Time'] = featureList[0]['Time']
         for df in featureList:
             curr_columns = [column for column in df.columns if column != 'Time']
@@ -131,6 +131,12 @@ def get_features_for_file_name(directory_path, file_name, template_df = None):
         result_features_list.append(kinect)      
     round_features_time(result_features_list) #округляем по время
     res = merge_all_features(result_features_list, template_df) # объединяем группы признаков в один dataframe
+    
+    # заполняем столбец признаков с пропусками NaN методом усреднения пропущенных значений между соседними
+    # https://stackoverflow.com/questions/44102794/imput-missed-values-with-mean-of-nearest-neighbors-in-column
+    for col in res:
+        res[col] = (res[col].fillna(method='ffill') + res[col].fillna(method='bfill')) / 2 
+    
     return res.fillna(0) # возвращаем с заполнение нулями пропусков
 
 def get_feature_for_name(directory_path, data_type, file_name):
@@ -216,14 +222,14 @@ template_df = get_template_dataframe(directory_path, files_df, data_type_names)
 Train_ids, Test_ids = train_test_split(files_df.index, random_state=RANDOM_SEED)
 
 Train_features = make_features_df_for_ids(Train_ids, agreement_score=0.6, verbose=True)
-Test_features = make_features_df_for_ids(Test_ids, agreement_score=0.6, verbose=True)
+Test_features = make_features_df_for_ids(Test_ids, agreement_score=0.0, verbose=True)
 
 #cv = KFold(n_splits=5, shuffle=True)
 columns_objects = ['Anger', 'Sad', 'Disgust', 'Happy', 'Scared', 'Neutral']
 columns_features = [col for col in Train_features.columns if col not in columns_objects]
 
 Y_train = Train_features[columns_objects]
-Train_features = Train_features[columns_features]
+Train_features = Train_features[columns_features].drop(['Agreement score'], axis = 1)
 
 X = np.array(Train_features)
 scaler = StandardScaler()
@@ -240,7 +246,7 @@ for emotion in Y_train:
 
 Y_test = Test_features[columns_objects]
 Test_features_agreement = Test_features.loc[:, 'Agreement score']
-Test_features = Test_features[columns_features]
+Test_features = Test_features[columns_features].drop(['Agreement score'], axis = 1)
 
 X_test = np.array(Test_features)
 X_test_scaled = scaler.fit_transform(X_test)
@@ -281,7 +287,7 @@ def get_multiclass_target(y):
 
 Y_multiclass_train = get_multiclass_target(Y_train)
 names = {0:'Anger', 1:'Sad', 2:'Disgust', 3:'Happy', 4:'Scared', 5:'Neutral'}
-for C in [10**p for p in range(-2, 0)]:
+for C in [10**p for p in range(-3, 0)]:
     start_time = datetime.datetime.now()
     clf = LogisticRegression(C=C, random_state=RANDOM_SEED)
     clf.fit(X_scaled, np.array(Y_multiclass_train))
