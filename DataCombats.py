@@ -221,8 +221,8 @@ template_df = get_template_dataframe(directory_path, files_df, data_type_names)
 
 Train_ids, Test_ids = train_test_split(files_df.index, random_state=RANDOM_SEED)
 
-Train_features = make_features_df_for_ids(Train_ids, agreement_score=0.6, verbose=True)
-Test_features = make_features_df_for_ids(Test_ids, agreement_score=0.0, verbose=True)
+Train_features = make_features_df_for_ids(Train_ids, verbose=True)
+Test_features = make_features_df_for_ids(Test_ids, verbose=True)
 
 #cv = KFold(n_splits=5, shuffle=True)
 columns_objects = ['Anger', 'Sad', 'Disgust', 'Happy', 'Scared', 'Neutral']
