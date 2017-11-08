@@ -169,7 +169,7 @@ def make_id_from_filename(file_name):
     """
     return int(file_name[2:-4], 16)
 
-def make_features_df_for_ids(ids, agreement_score=0.0, verbose=False):
+def make_features_df_for_ids(ids, agreement_score=None, verbose=False):
     """
         Makes dataframe from list of @ids using only rows, where Agreement score >= @agreement_score
     """
@@ -182,9 +182,10 @@ def make_features_df_for_ids(ids, agreement_score=0.0, verbose=False):
         # Получаем все признаки в куче
         features = get_features_for_file_name(directory_path, file_name, template_df)
         features = features.drop(['Time'], axis=1)
-        features['id'] = make_id_from_filename(file_name)
+        #features['id'] = make_id_from_filename(file_name)
         #features = features.iloc[::7,:]
-        features = features[features['Agreement score'] >= agreement_score]
+        if agreement_score:
+            features = features[features['Agreement score'] >= agreement_score]
         if ind > 0:
             res = res.append(features)
         else:
