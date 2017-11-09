@@ -6,7 +6,8 @@ from os import listdir
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import KFold, cross_val_score, train_test_split
-from sklearn.metrics import roc_auc_score
+import DataCombatsPlot
+
 import datetime
 
 RANDOM_SEED = 42
@@ -153,21 +154,6 @@ def get_feature_for_name(directory_path, data_type, file_name):
         return face_nn
     else:
         return pandas.read_csv('data/train/{}/{}'.format(data_type, file_name))
-    
-def plot(x, y, xlabel, ylabel):
-    plt.plot(x, y)
-    plt.grid(True)
-    plt.xlabel(xlabel)
-    plt.ylabel(ylabel)
-    plt.show()
-    
-def plot_pred(x, y, y_pred, xlabel, ylabel):
-    plt.plot(x, y)
-    plt.plot(x, y_pred)
-    plt.grid(True)
-    plt.xlabel(xlabel)
-    plt.ylabel(ylabel)
-    plt.show()
 
 def make_id_from_filename(file_name):
     """
@@ -219,7 +205,7 @@ template_df = get_template_dataframe(directory_path, files_df, data_type_names)
 
 # Формируем тестовую и тренировочную выборки
 
-Train_ids, Test_ids = train_test_split(files_df.index, random_state=RANDOM_SEED)
+Train_ids, Test_ids = train_test_split(files_df[:50].index, random_state=RANDOM_SEED)
 
 Train_features = make_features_df_for_ids(Train_ids, verbose=True)
 Test_features = make_features_df_for_ids(Test_ids, verbose=True)
@@ -275,7 +261,6 @@ def get_accuracy_score(y, prediction):
             acc_score += y.iloc[ind,:][ind_max]
             total += 1
         ind += 1
-    
     return acc_score / total
 
 def get_multiclass_target(y):
@@ -285,18 +270,72 @@ def get_multiclass_target(y):
         res[em] = y[em] * d[em]
     return res.sum(axis=1)
 
+def prediction_postprocessing(prediction):
+    result_predictions = pandas.DataFrame(np.zeros((len(prediction.index), len(prediction.columns))), columns=prediction.columns)  
+    ind = 0
+    for index, row in prediction.iterrows():
+        curr_max, ind_max = 0.0, ''
+        for em in prediction.columns:
+            if row[em] > curr_max:
+                curr_max = row[em]
+                ind_max = em
+        result_predictions.loc[ind, ind_max] = 1
+        ind += 1
+    return result_predictions
+                
+def get_prediction(ids, clf):
+    for file_id in ids:
+        Test_features = make_features_df_for_ids([file_id])
+        
+        Y_test = Test_features[columns_objects]
+        #Test_features_agreement = Test_features.loc[:, 'Agreement score']
+        Test_features = Test_features[columns_features].drop(['Agreement score'], axis = 1)
+        
+        X_test = np.array(Test_features)
+        X_test_scaled = scaler.fit_transform(X_test)
+        pred_emotions = clf.predict_proba(X_test_scaled)
+        predictions = pandas.DataFrame(pred_emotions)
+        predictions = predictions.rename(columns=names)
+        result_predictions = prediction_postprocessing(predictions)
+        print(result_predictions.sum())
+        print(file_id, get_accuracy_score(Y_test, result_predictions))
+
 Y_multiclass_train = get_multiclass_target(Y_train)
 names = {0:'Anger', 1:'Sad', 2:'Disgust', 3:'Happy', 4:'Scared', 5:'Neutral'}
-for C in [10**p for p in range(-3, 0)]:
+best_C = 0
+best_prediction = pandas.DataFrame()
+best_result_prediction = pandas.DataFrame()
+best_accuracy = 0
+for C in [10**p for p in range(-2, -1)]:
     start_time = datetime.datetime.now()
     clf = LogisticRegression(C=C, random_state=RANDOM_SEED)
     clf.fit(X_scaled, np.array(Y_multiclass_train))
+    '''
     pred_emotions = clf.predict_proba(X_test_scaled)
     predictions = pandas.DataFrame(pred_emotions)
-    print('C=', C, 'Time:', datetime.datetime.now() - start_time)
+    '''
+    print('C =', C, 'Time:', datetime.datetime.now() - start_time)
+    '''
     predictions = predictions.rename(columns=names)
-    print(get_accuracy_score(Y_test, predictions))
-'''
-x_range = range(0, len(Y_test))
-for emotion in Y_test:
-    plot_pred(x_range, Y_test.loc[:, emotion], pred_emotions[emotion] , "index", "result_" + emotion)'''
+    accuracy_score = get_accuracy_score(Y_test, predictions)
+    if (accuracy_score > best_accuracy):
+        best_accuracy = accuracy_score
+        best_C = C
+        best_prediction = predictions
+        best_result_prediction = prediction_postprocessing(predictions)
+    print('Accuracy score =', accuracy_score)
+    '''
+    get_prediction(Test_ids, clf)
+
+#print('Best C =', best_C, 'Accuracy score =', best_accuracy)
+
+# Отрисовка всех графиков предсказаний эмоций
+#x_range = range(0, len(Y_test))
+#for emotion in Y_test:
+#    DataCombatsPlot.plot_pred(x_range, Y_test.loc[:, emotion], predictions[emotion] , "Index", "Emotion: " + emotion)
+
+# Отрисовка графика предсказания эмоции по классам
+#DataCombatsPlot.plot_pred(x_range, get_multiclass_target(Y_test), get_multiclass_target(best_result_prediction) , "Index", "Emotions")
+
+# Отрисовка roc_auc
+#DataCombatsPlot.plot_roc_auc(columns_objects, best_prediction, Y_test)
