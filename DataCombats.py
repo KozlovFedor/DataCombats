@@ -219,7 +219,7 @@ template_df = get_template_dataframe(directory_path, files_df, data_type_names)
 
 # Формируем тестовую и тренировочную выборки
 
-Train_ids, Test_ids = train_test_split(files_df.index, random_state=RANDOM_SEED)
+Train_ids, Test_ids = train_test_split(files_df.index[:50], random_state=RANDOM_SEED)
 
 Train_features = make_features_df_for_ids(Train_ids, verbose=True)
 Test_features = make_features_df_for_ids(Test_ids, verbose=True)
@@ -261,7 +261,7 @@ for emotion in Y_test:
 
 predictions = pandas.DataFrame(pred_emotions)
 
-def get_accuracy_score(y, prediction):
+def get_accuracy_score(y, prediction, Test_features_agreement):
     acc_score = 0.0
     ind = 0
     total = 0
@@ -285,17 +285,49 @@ def get_multiclass_target(y):
         res[em] = y[em] * d[em]
     return res.sum(axis=1)
 
+def prediction_postprocessing(prediction):
+    for index, row in prediction.iterrows():
+        curr_max, ind_max = 0.0, ''
+        for em in prediction.columns:
+            if row[em] > curr_max:
+                curr_max = row[em]
+                ind_max = em
+        for em in prediction.columns:
+            if em == ind_max:
+                row[em] = 1
+            else:
+                row[em] = 0
+
+def get_prediction(ids, clf):
+    for file_id in ids:
+        Test_features = make_features_df_for_ids([file_id])
+        
+        Y_test = Test_features[columns_objects]
+        Test_features_agreement = Test_features.loc[:, 'Agreement score']
+        Test_features = Test_features[columns_features].drop(['Agreement score'], axis = 1)
+        
+        X_test = np.array(Test_features)
+        X_test_scaled = scaler.fit_transform(X_test)
+        pred_emotions = clf.predict_proba(X_test_scaled)
+        predictions = pandas.DataFrame(pred_emotions)
+        predictions = predictions.rename(columns=names)
+        prediction_postprocessing(predictions)
+        print(predictions.sum())
+        print(file_id, get_accuracy_score(Y_test, predictions, Test_features_agreement))
+    
+
 Y_multiclass_train = get_multiclass_target(Y_train)
 names = {0:'Anger', 1:'Sad', 2:'Disgust', 3:'Happy', 4:'Scared', 5:'Neutral'}
-for C in [10**p for p in range(-3, 0)]:
+for C in [10**p for p in range(-2, -1)]:
     start_time = datetime.datetime.now()
     clf = LogisticRegression(C=C, random_state=RANDOM_SEED)
     clf.fit(X_scaled, np.array(Y_multiclass_train))
-    pred_emotions = clf.predict_proba(X_test_scaled)
-    predictions = pandas.DataFrame(pred_emotions)
+    #pred_emotions = clf.predict_proba(X_test_scaled)
+    #predictions = pandas.DataFrame(pred_emotions)
     print('C=', C, 'Time:', datetime.datetime.now() - start_time)
-    predictions = predictions.rename(columns=names)
-    print(get_accuracy_score(Y_test, predictions))
+    #predictions = predictions.rename(columns=names)
+    #print(get_accuracy_score(Y_test, predictions))
+    get_prediction(Test_ids, clf)
 '''
 x_range = range(0, len(Y_test))
 for emotion in Y_test:
