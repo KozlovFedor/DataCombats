@@ -6,6 +6,8 @@ from os import listdir, makedirs
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import KFold, cross_val_score, train_test_split
+from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
+from sklearn.metrics import roc_auc_score
 import DataCombatsPlot
 import datetime
 
@@ -191,7 +193,7 @@ def make_features_df_for_ids(ids, directory_path, template_df = None, agreement_
             res = features
         ind += 1
     if verbose:
-        print('Done. Total time:', datetime.datetime.now() - start_time)
+        print('Done. Total time:', datetime.datetime.now() - start_time, '\n')
     return res
 
 def make_train_test_features(directory_path, data_type_names):
@@ -200,7 +202,7 @@ def make_train_test_features(directory_path, data_type_names):
     # Формируем шаблон для всех признаков на основе перечисленных в списке по группам признаков(data_type_names)
     template_df = get_template_dataframe(directory_path, files_df, data_type_names)
     # Формируем тестовую и тренировочную выборки
-    Train_ids, Test_ids = train_test_split(files_df[:50].index, random_state=RANDOM_SEED)
+    Train_ids, Test_ids = train_test_split(files_df.index, random_state=RANDOM_SEED)
     Train_features = make_features_df_for_ids(Train_ids, directory_path, template_df = template_df, verbose=True)
     Test_features = make_features_df_for_ids(Test_ids, directory_path, template_df = template_df, verbose=True)
     return Train_features, Test_features, template_df
@@ -226,9 +228,9 @@ def get_accuracy_score(y, prediction):
             if row[em] > curr_max:
                 curr_max = row[em]
                 ind_max = em
-        if Test_features_agreement.iloc[ind] > 0.6:
-            acc_score += y.iloc[ind,:][ind_max]
-            total += 1
+        #if Test_features_agreement.iloc[ind] > 0.6:
+        acc_score += y.iloc[ind,:][ind_max]
+        total += 1
         ind += 1
     return acc_score / total
 
@@ -238,6 +240,24 @@ def get_multiclass_target(y):
     for em in y:
         res[em] = y[em] * d[em]
     return res.sum(axis=1)
+
+def get_multiclass_accuracy_score(y, prediction):
+    ind = 0
+    counter = 0
+    for cl in y:
+        if (prediction[ind] == cl):
+            counter+=1
+        ind += 1
+    return counter / len(y)
+
+def reverse_multiclass_target(y):
+    res = pandas.DataFrame(np.zeros((len(y), len(columns_objects_dic))), columns=[x for x in range(len(columns_objects_dic))])
+    ind = 0
+    for cl in y:
+        res.loc[ind, cl] = 1
+        ind += 1
+    return res.rename(columns=columns_objects_dic)
+    
 
 def prediction_postprocessing(prediction):
     result_predictions = pandas.DataFrame(np.zeros((len(prediction.index), len(prediction.columns))), columns=prediction.columns)  
@@ -269,13 +289,13 @@ def get_prediction_for_ids(ids, clf, directory_path, template_df = None):
         print(result_predictions.sum())
         print(file_id, get_accuracy_score(Y_test, result_predictions))
 
-'''
 data_type_names= ['audio', 'eyes', 'face_nn', 'kinect', 'labels']
 directory_path = 'data/train/'
 Train_features, Test_features, template_df = make_train_test_features(directory_path, data_type_names)
 
 #cv = KFold(n_splits=5, shuffle=True)
 columns_objects = ['Anger', 'Sad', 'Disgust', 'Happy', 'Scared', 'Neutral']
+columns_objects_dic = {0:'Anger', 1:'Sad', 2:'Disgust', 3:'Happy', 4:'Scared', 5:'Neutral'}
 columns_features = [col for col in Train_features.columns if col not in columns_objects]
 
 Y_train = Train_features[columns_objects]
@@ -295,33 +315,77 @@ pred_emotions = {}
 
 predictions = pandas.DataFrame(pred_emotions)
 
-Y_multiclass_train = get_multiclass_target(Y_train)
-names = {0:'Anger', 1:'Sad', 2:'Disgust', 3:'Happy', 4:'Scared', 5:'Neutral'}
+Y_multiclass_train = get_multiclass_target(Y_train).astype(int)
+Y_multiclass_test = get_multiclass_target(Y_test).astype(int)
+
 best_C = 0
-best_prediction = pandas.DataFrame()
+#best_prediction = pandas.DataFrame
+best_prediction_probability = pandas.DataFrame()
 best_result_prediction = pandas.DataFrame()
-best_accuracy = 0
-for C in [10**p for p in range(-2, -1)]:
+best_accuracy_LR = 0    
+best_accuracy_RF_C_for_LR = 0
+best_criterion_for_LR = ''
+best_n_estimator_for_LR = 0
+
+#%%
+
+criterions = ['gini', 'entropy']
+n_estimators = [x*20 for x in range(1,16)]
+for C in [10**p for p in range(-5, 3)]:
+    print ('C =', C, "Learning process...")
     start_time = datetime.datetime.now()
-    clf = LogisticRegression(C=C, random_state=RANDOM_SEED)
+    clf = LogisticRegression(C=C, random_state=RANDOM_SEED, n_jobs = -1)
     clf.fit(X_scaled, np.array(Y_multiclass_train))
     
-    pred_emotions = clf.predict_proba(X_test_scaled)
-    predictions = pandas.DataFrame(pred_emotions)
+    #pred_emotion = reverse_multiclass_target(clf.predict(X_test_scaled))
+    pred_emotions_probability = clf.predict_proba(X_test_scaled)
+    predictions = pandas.DataFrame(pred_emotions_probability)
+    predictions = predictions.rename(columns=columns_objects_dic)
     
     print('C =', C, 'Time:', datetime.datetime.now() - start_time)
+    X_train_RF, X_test_RF, y_multiclass_train_RF, y_multiclass_test_RF = train_test_split(predictions, Y_multiclass_test.astype(int), random_state=RANDOM_SEED)
     
-    predictions = predictions.rename(columns=names)
+    best_accuracy_RF_C = 0
+    best_criterion = ''
+    best_n_estimator = 0
+    
+    for criterion in criterions:
+        for n_estimator in n_estimators:
+            clf_RF = RandomForestClassifier(n_estimators=n_estimator, criterion=criterion, random_state=RANDOM_SEED, n_jobs = -1)
+            clf_RF.fit(X_train_RF, np.array(y_multiclass_train_RF))
+            predictions_RF = clf_RF.predict(X_test_RF)
+            accuracy_score_RF = get_multiclass_accuracy_score(y_multiclass_test_RF, predictions_RF)
+            if (accuracy_score_RF > best_accuracy_RF_C):
+                best_accuracy_RF_C = accuracy_score_RF
+                best_criterion = criterion
+                best_n_estimator = n_estimator
+    print ('Best RF. criterion', best_criterion, 'n_estimator', best_n_estimator, 'accuracy score RF = ', best_accuracy_RF_C)
+        
     accuracy_score = get_accuracy_score(Y_test, predictions)
-    if (accuracy_score > best_accuracy):
-        best_accuracy = accuracy_score
+    if (accuracy_score > best_accuracy_LR):
+        best_accuracy_LR = accuracy_score
         best_C = C
-        best_prediction = predictions
+        best_prediction_probability = predictions
+        #best_prediction = pred_emotion
         best_result_prediction = prediction_postprocessing(predictions)
-    print('Accuracy score =', accuracy_score)    
+        best_accuracy_RF_C_for_LR = best_accuracy_RF_C
+        best_criterion_for_LR = best_criterion
+        best_n_estimator_for_LR = best_n_estimator
+    print('Accuracy score LR =', accuracy_score, '\n')    
+    
     #get_prediction_for_ids(Test_ids, clf, directory_path, template_df = template_df)
 
-#print('Best C =', best_C, 'Accuracy score =', best_accuracy)
+print('Best C =', best_C, 'Accuracy score LR=', best_accuracy_LR, '\n')
+print('Best RF for C. criterion', best_criterion_for_LR, 'n_estimator', best_n_estimator_for_LR, 'accuracy score RF = ', best_accuracy_RF_C_for_LR)
+
+print("test predictions values count:")
+print(Y_test.apply(pandas.value_counts), '\n')
+print("result predictions from probability values count:")
+print(best_result_prediction.apply(pandas.value_counts), '\n')
+#print("result predictions from predict values count:")
+#print(best_prediction.apply(pandas.value_counts), '\n')
+#print("Check equality:",(best_prediction != best_result_prediction).any())
+
 
 # Отрисовка всех графиков предсказаний эмоций
 #x_range = range(0, len(Y_test))
@@ -332,9 +396,10 @@ for C in [10**p for p in range(-2, -1)]:
 #DataCombatsPlot.plot_pred(x_range, get_multiclass_target(Y_test), get_multiclass_target(best_result_prediction) , "Index", "Emotions")
 
 # Отрисовка roc_auc
-#DataCombatsPlot.plot_roc_auc(columns_objects, best_prediction, Y_test)
-''' 
+#DataCombatsPlot.plot_roc_auc(columns_objects, best_prediction_probability, Y_test)
 
+
+'''
 # Получение признаков тренировочных и тестовых в куче
 data_train_type_names= ['audio', 'eyes', 'face_nn', 'kinect', 'labels']
 data_test_type_names= ['audio', 'eyes', 'face_nn', 'kinect', 'prediction']
@@ -397,6 +462,8 @@ directory_test_path_predictions = '{}prediction_{}'.format(directory_test_path, 
 makedirs(directory_test_path_predictions)
 print ("Predictions save directory:", directory_test_path_predictions)
 for file_id, group_predictions in grouped_predictions:
-    current_prediction_df = pandas.read_csv('{}prediction/{}'.format(directory_test_path, file_id), dtype={'Time': str}).fillna(0)
-    current_prediction_df[columns_objects] = group_predictions[columns_objects].values.astype(int)
-    current_prediction_df.to_csv('{}/{}'.format(directory_test_path_predictions, file_id), index=False)
+    if isfile('{}prediction/{}'.format(directory_test_path, file_id)):
+        current_prediction_df = pandas.read_csv('{}prediction/{}'.format(directory_test_path, file_id), dtype={'Time': str}).fillna(0)
+        current_prediction_df[columns_objects] = group_predictions[columns_objects].values.astype(int)
+        current_prediction_df.to_csv('{}/{}'.format(directory_test_path_predictions, file_id), index=False)
+'''
