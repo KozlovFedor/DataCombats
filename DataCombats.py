@@ -145,15 +145,15 @@ def get_feature_for_name(directory_path, data_type, file_name):
         Получение dataframe по заданному имени файла(file_name) для группы признаков (data_type) в каталоге(directory_path)
     """
     if (data_type == 'eyes'):
-        eyes = pandas.read_csv('data/train/eyes/{}'.format(file_name), skiprows=[0], header=None)
+        eyes = pandas.read_csv('{}eyes/{}'.format(directory_path, file_name), skiprows=[0], header=None)
         eyes = rename_columns(eyes, 'Time', 'eyes')
         return eyes
     elif (data_type == 'face_nn'):
-        face_nn = pandas.read_csv('data/train/face_nn/{}'.format(file_name), skiprows=[0], header=None)
+        face_nn = pandas.read_csv('{}face_nn/{}'.format(directory_path, file_name), skiprows=[0], header=None)
         face_nn = rename_columns(face_nn, 'Time', 'face')
         return face_nn
     else:
-        return pandas.read_csv('data/train/{}/{}'.format(data_type, file_name))
+        return pandas.read_csv('{}{}/{}'.format(directory_path, data_type, file_name))
 
 def make_id_from_filename(file_name):
     """
@@ -161,7 +161,7 @@ def make_id_from_filename(file_name):
     """
     return int(file_name[2:-4], 16)
 
-def make_features_df_for_ids(ids, agreement_score=None, verbose=False):
+def make_features_df_for_ids(directory_path, ids, agreement_score=None, verbose=False):
     """
         Makes dataframe from list of @ids using only rows, where Agreement score >= @agreement_score
     """
@@ -174,7 +174,7 @@ def make_features_df_for_ids(ids, agreement_score=None, verbose=False):
         # Получаем все признаки в куче
         features = get_features_for_file_name(directory_path, file_name, template_df)
         features = features.drop(['Time'], axis=1)
-        #features['id'] = make_id_from_filename(file_name)
+        features['id'] = file_name
         #features = features.iloc[::7,:]
         if agreement_score:
             features = features[features['Agreement score'] >= agreement_score]
@@ -195,6 +195,7 @@ x_type_names = ['audio', 'eyes', 'face_nn', 'kinect']
 # Получаем информацию о всех обрабатываемых файлах
 directory_path = 'data/train/'
 files_df = get_files_dataframes(directory_path, data_type_names)
+test_files_df = get_files_dataframes('data/test/', data_type_names)
 
 # Выбираем файлы для дальнейшей обработки
 #files_to_process = files_df # выбираем все файлы, даже с пропуском групп признаков
@@ -205,10 +206,16 @@ template_df = get_template_dataframe(directory_path, files_df, data_type_names)
 
 # Формируем тестовую и тренировочную выборки
 
-Train_ids, Test_ids = train_test_split(files_df[:50].index, random_state=RANDOM_SEED)
+#Train_ids, Test_ids = train_test_split(files_df[:50].index, random_state=RANDOM_SEED)
+Train_ids = files_df.index
+Test_ids = test_files_df.index
 
-Train_features = make_features_df_for_ids(Train_ids, verbose=True)
-Test_features = make_features_df_for_ids(Test_ids, verbose=True)
+Train_features = make_features_df_for_ids(directory_path, Train_ids, verbose=True)
+Train_features = Train_features.drop(['id'], axis = 1)
+Test_features = make_features_df_for_ids('data/test/', Test_ids, verbose=True)
+Test_features_ids = Test_features['id']
+Test_features = Test_features.drop(['id'], axis = 1)
+
 
 #cv = KFold(n_splits=5, shuffle=True)
 columns_objects = ['Anger', 'Sad', 'Disgust', 'Happy', 'Scared', 'Neutral']
@@ -306,27 +313,43 @@ best_C = 0
 best_prediction = pandas.DataFrame()
 best_result_prediction = pandas.DataFrame()
 best_accuracy = 0
-for C in [10**p for p in range(-2, -1)]:
+prediction_dict = {}
+for C in [10**p for p in range(-1, 0)]:
     start_time = datetime.datetime.now()
     clf = LogisticRegression(C=C, random_state=RANDOM_SEED)
     clf.fit(X_scaled, np.array(Y_multiclass_train))
-    '''
+    
     pred_emotions = clf.predict_proba(X_test_scaled)
     predictions = pandas.DataFrame(pred_emotions)
-    '''
+    
     print('C =', C, 'Time:', datetime.datetime.now() - start_time)
-    '''
+    
     predictions = predictions.rename(columns=names)
-    accuracy_score = get_accuracy_score(Y_test, predictions)
-    if (accuracy_score > best_accuracy):
+    predictions = prediction_postprocessing(predictions)
+    predictions['id'] = Test_features_ids.reset_index(drop=True)
+    Y_test['id'] = Test_features_ids
+    total_acc = 0
+    for file_id in Test_ids:
+        prediction_dict[file_id] = predictions[predictions['id'] == file_id].drop(['id'], axis = 1)
+        #current_Y_test = Y_test[Y_test['id'] == file_id].drop(['id'], axis = 1)
+        #accuracy_score = get_accuracy_score(current_Y_test, prediction_dict[file_id])
+        #print(file_id, accuracy_score)
+        #total_acc += accuracy_score
+    '''if (accuracy_score > best_accuracy):
         best_accuracy = accuracy_score
         best_C = C
         best_prediction = predictions
-        best_result_prediction = prediction_postprocessing(predictions)
-    print('Accuracy score =', accuracy_score)
-    '''
-    get_prediction(Test_ids, clf)
+        best_result_prediction = prediction_postprocessing(predictions)'''
+    print('Accuracy score =', total_acc / Test_ids.size())
+    
+    '''get_prediction(Test_ids, clf)'''
 
+for file_id in Test_ids:
+    if isfile('data/test/labels/{}'.format(file_id)):
+        labels = pandas.read_csv('data/test/labels/{}'.format(file_id))
+        prediction_dict[file_id] = prediction_dict[file_id].astype(int)
+        prediction_dict[file_id].insert(0, 'Time', labels['Time'])
+        prediction_dict[file_id].to_csv('data/test/prediction/{}'.format(file_id), index=False)
 #print('Best C =', best_C, 'Accuracy score =', best_accuracy)
 
 # Отрисовка всех графиков предсказаний эмоций
