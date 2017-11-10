@@ -2,12 +2,11 @@ import numpy as np
 import pandas
 import matplotlib.pyplot as plt
 from os.path import isfile, join
-from os import listdir
+from os import listdir, makedirs
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import KFold, cross_val_score, train_test_split
 import DataCombatsPlot
-
 import datetime
 
 RANDOM_SEED = 42
@@ -105,11 +104,16 @@ def get_features_for_file_name(directory_path, file_name, template_df = None):
         Получение общего dataframe всех групп признаков в каталоге directory_path для файла file_name.
     """
     result_features_list = []  
-    # labels
+    # labels or predictions
     labels_file = '{}labels/{}'.format(directory_path, file_name)
     labels = read_file_csv(labels_file)
     if labels is not None:
         result_features_list.append(labels)
+    else:
+         predictions_file = '{}prediction/{}'.format(directory_path, file_name)
+         predictions = read_file_csv(predictions_file)
+         if predictions is not None:
+             result_features_list.append(predictions)
     # audio
     audio_file = '{}audio/{}'.format(directory_path, file_name)
     audio = read_file_csv(audio_file)
@@ -145,15 +149,15 @@ def get_feature_for_name(directory_path, data_type, file_name):
         Получение dataframe по заданному имени файла(file_name) для группы признаков (data_type) в каталоге(directory_path)
     """
     if (data_type == 'eyes'):
-        eyes = pandas.read_csv('data/train/eyes/{}'.format(file_name), skiprows=[0], header=None)
+        eyes = pandas.read_csv('{}eyes/{}'.format(directory_path, file_name), skiprows=[0], header=None)
         eyes = rename_columns(eyes, 'Time', 'eyes')
         return eyes
     elif (data_type == 'face_nn'):
-        face_nn = pandas.read_csv('data/train/face_nn/{}'.format(file_name), skiprows=[0], header=None)
+        face_nn = pandas.read_csv('{}face_nn/{}'.format(directory_path, file_name), skiprows=[0], header=None)
         face_nn = rename_columns(face_nn, 'Time', 'face')
         return face_nn
     else:
-        return pandas.read_csv('data/train/{}/{}'.format(data_type, file_name))
+        return pandas.read_csv('{}{}/{}'.format(directory_path, data_type, file_name))
 
 def make_id_from_filename(file_name):
     """
@@ -161,20 +165,23 @@ def make_id_from_filename(file_name):
     """
     return int(file_name[2:-4], 16)
 
-def make_features_df_for_ids(ids, agreement_score=None, verbose=False):
+def make_features_df_for_ids(ids, directory_path, template_df = None, agreement_score=None, verbose=False, create_id_column=False):
     """
         Makes dataframe from list of @ids using only rows, where Agreement score >= @agreement_score
     """
     if verbose:
-        print('Start make_features_df_for_ids. Total files to process:', len(ids))
+        print('Start make_features_df_for_ids. Total files to process:', len(ids), 'directory path: ', directory_path)
     start_time = datetime.datetime.now()
     res = pandas.DataFrame()
     ind = 0
     for file_name in ids:
         # Получаем все признаки в куче
+        if verbose:
+            print("make_features_df_for_ids. index: {}. dir: {}. id: {}".format(ind, directory_path, file_name))
         features = get_features_for_file_name(directory_path, file_name, template_df)
         features = features.drop(['Time'], axis=1)
-        #features['id'] = make_id_from_filename(file_name)
+        if (create_id_column):
+            features['id'] = file_name
         #features = features.iloc[::7,:]
         if agreement_score:
             features = features[features['Agreement score'] >= agreement_score]
@@ -187,65 +194,27 @@ def make_features_df_for_ids(ids, agreement_score=None, verbose=False):
         print('Done. Total time:', datetime.datetime.now() - start_time)
     return res
 
-data_type_names= ['audio', 'eyes', 'face_nn', 'kinect', 'labels']
-x_type_names = ['audio', 'eyes', 'face_nn', 'kinect']
+def make_train_test_features(directory_path, data_type_names):
+    # Получаем информацию о всех обрабатываемых файлах
+    files_df = get_files_dataframes(directory_path, data_type_names)
+    # Формируем шаблон для всех признаков на основе перечисленных в списке по группам признаков(data_type_names)
+    template_df = get_template_dataframe(directory_path, files_df, data_type_names)
+    # Формируем тестовую и тренировочную выборки
+    Train_ids, Test_ids = train_test_split(files_df[:50].index, random_state=RANDOM_SEED)
+    Train_features = make_features_df_for_ids(Train_ids, directory_path, template_df = template_df, verbose=True)
+    Test_features = make_features_df_for_ids(Test_ids, directory_path, template_df = template_df, verbose=True)
+    return Train_features, Test_features, template_df
 
-#plot(labels['Time'], labels['Agreement score'], 't', 'arg scr')
-
-# Получаем информацию о всех обрабатываемых файлах
-directory_path = 'data/train/'
-files_df = get_files_dataframes(directory_path, data_type_names)
-
-# Выбираем файлы для дальнейшей обработки
-#files_to_process = files_df # выбираем все файлы, даже с пропуском групп признаков
-files_to_process = get_all_exists_dataframes(files_df) # выбираем файлы без пропусков групп признаков
-
-# Формируем шаблон для всех признаков на основе перечисленных в списке по группам признаков(data_type_names)
-template_df = get_template_dataframe(directory_path, files_df, data_type_names)
-
-# Формируем тестовую и тренировочную выборки
-
-Train_ids, Test_ids = train_test_split(files_df[:50].index, random_state=RANDOM_SEED)
-
-Train_features = make_features_df_for_ids(Train_ids, verbose=True)
-Test_features = make_features_df_for_ids(Test_ids, verbose=True)
-
-#cv = KFold(n_splits=5, shuffle=True)
-columns_objects = ['Anger', 'Sad', 'Disgust', 'Happy', 'Scared', 'Neutral']
-columns_features = [col for col in Train_features.columns if col not in columns_objects]
-
-Y_train = Train_features[columns_objects]
-Train_features = Train_features[columns_features].drop(['Agreement score'], axis = 1)
-
-X = np.array(Train_features)
-scaler = StandardScaler()
-X_scaled = scaler.fit_transform(X)
-'''
-for emotion in Y_train:
-    start_time = datetime.datetime.now()
-    clf = LogisticRegression()
-    #X_train, X_test, y_train, y_test = train_test_split(X_scaled, np.array(Y[emoution]))
-    #clf.fit(X_train, y_train)
-    score = cross_val_score(clf, X_scaled, np.array(Y_train[emotion]), scoring='roc_auc', cv=cv)
-    #pred = clf.predict_proba(X_test)[:, 1]
-    print(emotion, score.mean(), 'Time:', datetime.datetime.now() - start_time)#roc_auc_score(y_test, pred))'''
-
-Y_test = Test_features[columns_objects]
-Test_features_agreement = Test_features.loc[:, 'Agreement score']
-Test_features = Test_features[columns_features].drop(['Agreement score'], axis = 1)
-
-X_test = np.array(Test_features)
-X_test_scaled = scaler.fit_transform(X_test)
-pred_emotions = {}
-'''
-for emotion in Y_test:
-    start_time = datetime.datetime.now()
-    clf = LogisticRegression()
-    clf.fit(X_scaled, np.array(Y_train[emotion]))
-    pred_emotions[emotion] = clf.predict_proba(X_test_scaled)[:, 1]
-    print(emotion, roc_auc_score(Y_test[emotion], pred_emotions[emotion]), 'Time:', datetime.datetime.now() - start_time)'''
-
-predictions = pandas.DataFrame(pred_emotions)
+def make_train_test_features_final(directory_train_path, directory_test_path, data_train_type_names, data_test_type_names):
+    files_train_df = get_files_dataframes(directory_train_path, data_train_type_names)
+    files_test_df = get_files_dataframes(directory_test_path, data_test_type_names)
+    template_train_df = get_template_dataframe(directory_train_path, files_train_df, data_train_type_names)
+    template_test_df = get_template_dataframe(directory_test_path, files_test_df, data_test_type_names)
+    Train_ids = files_train_df.index
+    Test_ids = files_test_df.index
+    Train_features = make_features_df_for_ids(Train_ids, directory_train_path, template_df = template_train_df, verbose=True)
+    Test_features = make_features_df_for_ids(Test_ids, directory_test_path, template_df = template_test_df, verbose=True, create_id_column=True)
+    return Train_features, Test_features
 
 def get_accuracy_score(y, prediction):
     acc_score = 0.0
@@ -283,9 +252,9 @@ def prediction_postprocessing(prediction):
         ind += 1
     return result_predictions
                 
-def get_prediction(ids, clf):
+def get_prediction_for_ids(ids, clf, directory_path, template_df = None):
     for file_id in ids:
-        Test_features = make_features_df_for_ids([file_id])
+        Test_features = make_features_df_for_ids([file_id], directory_path, template_df = template_df)
         
         Y_test = Test_features[columns_objects]
         #Test_features_agreement = Test_features.loc[:, 'Agreement score']
@@ -295,10 +264,36 @@ def get_prediction(ids, clf):
         X_test_scaled = scaler.fit_transform(X_test)
         pred_emotions = clf.predict_proba(X_test_scaled)
         predictions = pandas.DataFrame(pred_emotions)
-        predictions = predictions.rename(columns=names)
+        predictions = predictions.rename(columns=columns_objects_dic)
         result_predictions = prediction_postprocessing(predictions)
         print(result_predictions.sum())
         print(file_id, get_accuracy_score(Y_test, result_predictions))
+
+'''
+data_type_names= ['audio', 'eyes', 'face_nn', 'kinect', 'labels']
+directory_path = 'data/train/'
+Train_features, Test_features, template_df = make_train_test_features(directory_path, data_type_names)
+
+#cv = KFold(n_splits=5, shuffle=True)
+columns_objects = ['Anger', 'Sad', 'Disgust', 'Happy', 'Scared', 'Neutral']
+columns_features = [col for col in Train_features.columns if col not in columns_objects]
+
+Y_train = Train_features[columns_objects]
+Train_features = Train_features[columns_features].drop(['Agreement score'], axis = 1)
+
+X = np.array(Train_features)
+scaler = StandardScaler()
+X_scaled = scaler.fit_transform(X)
+
+Y_test = Test_features[columns_objects]
+Test_features_agreement = Test_features.loc[:, 'Agreement score']
+Test_features = Test_features[columns_features].drop(['Agreement score'], axis = 1)
+
+X_test = np.array(Test_features)
+X_test_scaled = scaler.fit_transform(X_test)
+pred_emotions = {}
+
+predictions = pandas.DataFrame(pred_emotions)
 
 Y_multiclass_train = get_multiclass_target(Y_train)
 names = {0:'Anger', 1:'Sad', 2:'Disgust', 3:'Happy', 4:'Scared', 5:'Neutral'}
@@ -310,12 +305,12 @@ for C in [10**p for p in range(-2, -1)]:
     start_time = datetime.datetime.now()
     clf = LogisticRegression(C=C, random_state=RANDOM_SEED)
     clf.fit(X_scaled, np.array(Y_multiclass_train))
-    '''
+    
     pred_emotions = clf.predict_proba(X_test_scaled)
     predictions = pandas.DataFrame(pred_emotions)
-    '''
+    
     print('C =', C, 'Time:', datetime.datetime.now() - start_time)
-    '''
+    
     predictions = predictions.rename(columns=names)
     accuracy_score = get_accuracy_score(Y_test, predictions)
     if (accuracy_score > best_accuracy):
@@ -323,9 +318,8 @@ for C in [10**p for p in range(-2, -1)]:
         best_C = C
         best_prediction = predictions
         best_result_prediction = prediction_postprocessing(predictions)
-    print('Accuracy score =', accuracy_score)
-    '''
-    get_prediction(Test_ids, clf)
+    print('Accuracy score =', accuracy_score)    
+    #get_prediction_for_ids(Test_ids, clf, directory_path, template_df = template_df)
 
 #print('Best C =', best_C, 'Accuracy score =', best_accuracy)
 
@@ -339,3 +333,70 @@ for C in [10**p for p in range(-2, -1)]:
 
 # Отрисовка roc_auc
 #DataCombatsPlot.plot_roc_auc(columns_objects, best_prediction, Y_test)
+''' 
+
+# Получение признаков тренировочных и тестовых в куче
+data_train_type_names= ['audio', 'eyes', 'face_nn', 'kinect', 'labels']
+data_test_type_names= ['audio', 'eyes', 'face_nn', 'kinect', 'prediction']
+directory_train_path = 'data/train/'
+directory_test_path = 'data/test/'
+Train_features, Test_features = make_train_test_features_final(directory_train_path, directory_test_path, 
+                                                               data_train_type_names, data_test_type_names)
+
+# Формируем списки имен столбцов признаков и целевых
+columns_objects = ['Anger', 'Sad', 'Disgust', 'Happy', 'Scared', 'Neutral']
+columns_objects_dic = {0:'Anger', 1:'Sad', 2:'Disgust', 3:'Happy', 4:'Scared', 5:'Neutral'}
+columns_features = [col for col in Train_features.columns if col not in columns_objects]
+
+# Подготавливаем тренировочные данные
+#Y
+Y_train = Train_features[columns_objects]
+Y_multiclass_train = get_multiclass_target(Y_train)
+#X
+Train_features = Train_features[columns_features].drop(['Agreement score'], axis = 1)
+X = np.array(Train_features)
+scaler = StandardScaler()
+X_scaled = scaler.fit_transform(X)
+
+# Подготавливаем тестовые данные
+id_features_column = Test_features['id']
+#X
+Test_features.drop(['id'], axis=1, inplace=True)
+Test_features.drop(columns_objects, axis=1, inplace=True)
+X_test = np.array(Test_features)
+X_test_scaled = scaler.fit_transform(X_test)
+
+
+pred_emotions = {}
+predictions = pandas.DataFrame(pred_emotions)
+C = 0.01
+
+print ("Learning process...")
+start_time = datetime.datetime.now()
+# Обучаем
+clf = LogisticRegression(C=C, random_state=RANDOM_SEED)
+clf.fit(X_scaled, np.array(Y_multiclass_train))
+    
+# Предсказываем
+print ("Prediction process...")
+pred_emotions = clf.predict_proba(X_test_scaled)
+predictions = pandas.DataFrame(pred_emotions)
+    
+print('C =', C, 'Time:', datetime.datetime.now() - start_time)
+    
+
+print ("Save prediction to file process...")
+predictions = predictions.rename(columns=columns_objects_dic)
+predictions_final = prediction_postprocessing(predictions)
+
+predictions_final["id"]=id_features_column.values
+
+grouped_predictions = predictions_final.groupby("id")
+
+directory_test_path_predictions = '{}prediction_{}'.format(directory_test_path, datetime.datetime.strftime(datetime.datetime.now(), '%Y-%m-%d-%H-%M-%S'))
+makedirs(directory_test_path_predictions)
+print ("Predictions save directory:", directory_test_path_predictions)
+for file_id, group_predictions in grouped_predictions:
+    current_prediction_df = pandas.read_csv('{}prediction/{}'.format(directory_test_path, file_id), dtype={'Time': str}).fillna(0)
+    current_prediction_df[columns_objects] = group_predictions[columns_objects].values.astype(int)
+    current_prediction_df.to_csv('{}/{}'.format(directory_test_path_predictions, file_id), index=False)
