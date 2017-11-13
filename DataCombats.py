@@ -196,20 +196,35 @@ def make_features_df_for_ids(ids, directory_path, template_df = None, agreement_
         print('Done. Total time:', datetime.datetime.now() - start_time, '\n')
     return res
 
+def get_files_without_few_features(files_df):
+    for index, row in files_df.iterrows():
+        if (row[files_df.columns].sum() <= 2):
+            files_df.drop(index, inplace=True)
+
 def make_train_test_features(directory_path, data_type_names):
     # Получаем информацию о всех обрабатываемых файлах
     files_df = get_files_dataframes(directory_path, data_type_names)
+    # Фильтруем файлы без признаков или с малым набором признаков
+    get_files_without_few_features(files_df)
     # Формируем шаблон для всех признаков на основе перечисленных в списке по группам признаков(data_type_names)
     template_df = get_template_dataframe(directory_path, files_df, data_type_names)
     # Формируем тестовую и тренировочную выборки
-    Train_ids, Test_ids = train_test_split(files_df.index, random_state=RANDOM_SEED)
+    Train_files, Test_files = train_test_split(files_df, random_state=RANDOM_SEED)
+    print ('Train_files split:\n', Train_files.groupby(Train_files.columns.tolist(),as_index=False).size())
+    print ('Test_files split:\n', Test_files.groupby(Test_files.columns.tolist(),as_index=False).size())
+    Train_ids = Train_files.index
+    Test_ids = Test_files.index
+    # Получаем таблицы признаков
     Train_features = make_features_df_for_ids(Train_ids, directory_path, template_df = template_df, verbose=True)
     Test_features = make_features_df_for_ids(Test_ids, directory_path, template_df = template_df, verbose=True)
     return Train_features, Test_features, template_df
 
 def make_train_test_features_final(directory_train_path, directory_test_path, data_train_type_names, data_test_type_names):
     files_train_df = get_files_dataframes(directory_train_path, data_train_type_names)
+    get_files_without_few_features(files_train_df)
     files_test_df = get_files_dataframes(directory_test_path, data_test_type_names)
+    print ('Train_files split:\n', files_train_df.groupby(files_train_df.columns.tolist(),as_index=False).size())
+    print ('Test_files split:\n', files_test_df.groupby(files_test_df.columns.tolist(),as_index=False).size())    
     template_train_df = get_template_dataframe(directory_train_path, files_train_df, data_train_type_names)
     template_test_df = get_template_dataframe(directory_test_path, files_test_df, data_test_type_names)
     Train_ids = files_train_df.index
@@ -288,7 +303,7 @@ def get_prediction_for_ids(ids, clf, directory_path, template_df = None):
         result_predictions = prediction_postprocessing(predictions)
         print(result_predictions.sum())
         print(file_id, get_accuracy_score(Y_test, result_predictions))
-
+'''
 data_type_names= ['audio', 'eyes', 'face_nn', 'kinect', 'labels']
 directory_path = 'data/train/'
 Train_features, Test_features, template_df = make_train_test_features(directory_path, data_type_names)
@@ -397,9 +412,9 @@ print(best_result_prediction.apply(pandas.value_counts), '\n')
 
 # Отрисовка roc_auc
 #DataCombatsPlot.plot_roc_auc(columns_objects, best_prediction_probability, Y_test)
-
-
 '''
+
+
 # Получение признаков тренировочных и тестовых в куче
 data_train_type_names= ['audio', 'eyes', 'face_nn', 'kinect', 'labels']
 data_test_type_names= ['audio', 'eyes', 'face_nn', 'kinect', 'prediction']
@@ -416,12 +431,12 @@ columns_features = [col for col in Train_features.columns if col not in columns_
 # Подготавливаем тренировочные данные
 #Y
 Y_train = Train_features[columns_objects]
-Y_multiclass_train = get_multiclass_target(Y_train)
+Y_multiclass_train = get_multiclass_target(Y_train).astype(int)
 #X
 Train_features = Train_features[columns_features].drop(['Agreement score'], axis = 1)
 X = np.array(Train_features)
-scaler = StandardScaler()
-X_scaled = scaler.fit_transform(X)
+#scaler = StandardScaler()
+#X_scaled = scaler.fit_transform(X)
 
 # Подготавливаем тестовые данные
 id_features_column = Test_features['id']
@@ -429,30 +444,26 @@ id_features_column = Test_features['id']
 Test_features.drop(['id'], axis=1, inplace=True)
 Test_features.drop(columns_objects, axis=1, inplace=True)
 X_test = np.array(Test_features)
-X_test_scaled = scaler.fit_transform(X_test)
+#X_test_scaled = scaler.fit_transform(X_test)
 
 
 pred_emotions = {}
 predictions = pandas.DataFrame(pred_emotions)
-C = 0.01
 
 print ("Learning process...")
 start_time = datetime.datetime.now()
 # Обучаем
-clf = LogisticRegression(C=C, random_state=RANDOM_SEED)
-clf.fit(X_scaled, np.array(Y_multiclass_train))
-    
+#clf = LogisticRegression(C=C, random_state=RANDOM_SEED)
+#clf.fit(X_scaled, np.array(Y_multiclass_train))
+clf_RF = RandomForestClassifier(n_estimators=260, criterion='gini', random_state=RANDOM_SEED, n_jobs = -1)
+clf_RF.fit(X, np.array(Y_multiclass_train))
+predictions_RF = clf_RF.predict(X_test)
 # Предсказываем
 print ("Prediction process...")
-pred_emotions = clf.predict_proba(X_test_scaled)
-predictions = pandas.DataFrame(pred_emotions)
-    
-print('C =', C, 'Time:', datetime.datetime.now() - start_time)
-    
+print('Time:', datetime.datetime.now() - start_time)    
 
 print ("Save prediction to file process...")
-predictions = predictions.rename(columns=columns_objects_dic)
-predictions_final = prediction_postprocessing(predictions)
+predictions_final = reverse_multiclass_target(predictions_RF)
 
 predictions_final["id"]=id_features_column.values
 
@@ -466,4 +477,177 @@ for file_id, group_predictions in grouped_predictions:
         current_prediction_df = pandas.read_csv('{}prediction/{}'.format(directory_test_path, file_id), dtype={'Time': str}).fillna(0)
         current_prediction_df[columns_objects] = group_predictions[columns_objects].values.astype(int)
         current_prediction_df.to_csv('{}/{}'.format(directory_test_path_predictions, file_id), index=False)
+
+'''
+data_type_names= ['audio', 'eyes', 'face_nn', 'kinect', 'labels']
+directory_path = 'data/train/'
+Train_features, Test_features, template_df = make_train_test_features(directory_path, data_type_names)
+
+#cv = KFold(n_splits=5, shuffle=True)
+columns_objects = ['Anger', 'Sad', 'Disgust', 'Happy', 'Scared', 'Neutral']
+columns_objects_dic = {0:'Anger', 1:'Sad', 2:'Disgust', 3:'Happy', 4:'Scared', 5:'Neutral'}
+columns_features = [col for col in Train_features.columns if col not in columns_objects]
+
+Y_train = Train_features[columns_objects]
+Train_features = Train_features[columns_features].drop(['Agreement score'], axis = 1)
+
+X = np.array(Train_features)
+scaler = StandardScaler()
+X_scaled = scaler.fit_transform(X)
+
+Y_test = Test_features[columns_objects]
+Test_features_agreement = Test_features.loc[:, 'Agreement score']
+Test_features = Test_features[columns_features].drop(['Agreement score'], axis = 1)
+
+X_test = np.array(Test_features)
+X_test_scaled = scaler.fit_transform(X_test)
+pred_emotions = {}
+
+predictions = pandas.DataFrame(pred_emotions)
+
+Y_multiclass_train = get_multiclass_target(Y_train).astype(int)
+Y_multiclass_test = get_multiclass_target(Y_test).astype(int)
+
+#%%
+
+C=0.01
+print ('C =', C, "Learning process...")
+start_time = datetime.datetime.now()
+clf = LogisticRegression(C=C, random_state=RANDOM_SEED)
+clf.fit(X_scaled, np.array(Y_multiclass_train))
+    
+#pred_emotion = reverse_multiclass_target(clf.predict(X_test_scaled))
+pred_emotions_probability = clf.predict_proba(X_test_scaled)
+predictions = pandas.DataFrame(pred_emotions_probability)
+predictions = predictions.rename(columns=columns_objects_dic)
+    
+print('C =', C, 'Time:', datetime.datetime.now() - start_time)
+#X_train_RF, X_test_RF, y_multiclass_train_RF, y_multiclass_test_RF = train_test_split(predictions, Y_multiclass_test.astype(int), random_state=RANDOM_SEED)
+
+criterion = 'entropy'
+n_estimator = 500
+print ('Learning RF. criterion', criterion, 'n_estimator', n_estimator)
+clf_RF = RandomForestClassifier(n_estimators=n_estimator, criterion=criterion, random_state=RANDOM_SEED, n_jobs = -1)
+clf_RF.fit(predictions, np.array(Y_multiclass_test))
+#predictions_RF = clf_RF.predict(X_test_RF)
+#accuracy_score_RF = get_multiclass_accuracy_score(y_multiclass_test_RF, predictions_RF)
+
+
+# Получаем тестовые финальные данные из файлов
+directory_test_path = 'data/test/'
+data_test_type_names= ['audio', 'eyes', 'face_nn', 'kinect', 'prediction']
+files_test_df = get_files_dataframes(directory_test_path, data_test_type_names)
+template_test_df = get_template_dataframe(directory_test_path, files_test_df, data_test_type_names)
+Test_ids = files_test_df.index
+Test_features_final = make_features_df_for_ids(Test_ids, directory_test_path, template_df = template_test_df, verbose=True, create_id_column=True)
+
+# Подготавливаем тестовые данные
+id_features_column = Test_features_final['id']
+#X
+Test_features_final.drop(['id'], axis=1, inplace=True)
+Test_features_final.drop(columns_objects, axis=1, inplace=True)
+X_test_final = np.array(Test_features_final)
+X_test_scaled_final = scaler.fit_transform(X_test_final)
+
+# Предсказываем
+print ("Prediction final process...")
+pred_emotions_final = clf.predict_proba(X_test_scaled_final)
+predictions_final = pandas.DataFrame(pred_emotions_final)
+predictions_final = predictions_final.rename(columns=columns_objects_dic)
+predictions_RF_final = clf_RF.predict(predictions_final)
+
+predictions_total_final = reverse_multiclass_target(predictions_RF_final)
+
+predictions_total_final["id"]=id_features_column.values
+
+grouped_predictions = predictions_total_final.groupby("id")
+
+directory_test_path_predictions = '{}prediction_{}'.format(directory_test_path, datetime.datetime.strftime(datetime.datetime.now(), '%Y-%m-%d-%H-%M-%S'))
+makedirs(directory_test_path_predictions)
+print ("Predictions save directory:", directory_test_path_predictions)
+for file_id, group_predictions in grouped_predictions:
+    if isfile('{}prediction/{}'.format(directory_test_path, file_id)):
+        current_prediction_df = pandas.read_csv('{}prediction/{}'.format(directory_test_path, file_id), dtype={'Time': str}).fillna(0)
+        current_prediction_df[columns_objects] = group_predictions[columns_objects].values.astype(int)
+        current_prediction_df.to_csv('{}/{}'.format(directory_test_path_predictions, file_id), index=False)
+'''
+'''
+
+data_type_names= ['audio', 'eyes', 'face_nn', 'kinect', 'labels']
+directory_path = 'data/train/'
+Train_features, Test_features, template_df = make_train_test_features(directory_path, data_type_names)
+
+#cv = KFold(n_splits=5, shuffle=True)
+columns_objects = ['Anger', 'Sad', 'Disgust', 'Happy', 'Scared', 'Neutral']
+columns_objects_dic = {0:'Anger', 1:'Sad', 2:'Disgust', 3:'Happy', 4:'Scared', 5:'Neutral'}
+columns_features = [col for col in Train_features.columns if col not in columns_objects]
+
+Y_train = Train_features[columns_objects]
+Train_features = Train_features[columns_features].drop(['Agreement score'], axis = 1)
+
+X = np.array(Train_features)
+#scaler = StandardScaler()
+#X_scaled = scaler.fit_transform(X)
+
+Y_test = Test_features[columns_objects]
+Test_features_agreement = Test_features.loc[:, 'Agreement score']
+Test_features = Test_features[columns_features].drop(['Agreement score'], axis = 1)
+
+X_test = np.array(Test_features)
+#X_test_scaled = scaler.fit_transform(X_test)
+pred_emotions = {}
+
+Y_multiclass_train = get_multiclass_target(Y_train).astype(int)
+Y_multiclass_test = get_multiclass_target(Y_test).astype(int)
+
+best_accuracy_RF = 0
+best_criterion_for_LR = ''
+best_n_estimator_for_LR = 0
+
+#%%
+
+criterions = ['gini', 'entropy']
+n_estimators = [x*20 for x in range(1,16)]
+best_accuracy_RF = 0
+best_criterion = ''
+best_n_estimator = 0
+    
+for criterion in criterions:
+    for n_estimator in n_estimators:
+        print ('RF. criterion', criterion, 'n_estimator', n_estimator)
+        start_time = datetime.datetime.now()
+   
+        clf_RF = RandomForestClassifier(n_estimators=n_estimator, criterion=criterion, random_state=RANDOM_SEED, n_jobs = -1)
+        clf_RF.fit(X, np.array(Y_multiclass_train))
+        predictions_RF = clf_RF.predict(X_test)
+        accuracy_score_RF = get_multiclass_accuracy_score(Y_multiclass_test, predictions_RF)
+        if (accuracy_score_RF > best_accuracy_RF):
+            best_accuracy_RF = accuracy_score_RF
+            best_criterion = criterion
+            best_n_estimator = n_estimator
+        print('RF. Time:', datetime.datetime.now() - start_time, 'accuracy_score:', accuracy_score_RF)
+print ('Best RF. criterion', best_criterion, 'n_estimator', best_n_estimator, 'accuracy score RF = ', best_accuracy_RF)
+    
+    #get_prediction_for_ids(Test_ids, clf, directory_path, template_df = template_df)
+
+print("test predictions values count:")
+print(Y_test.apply(pandas.value_counts), '\n')
+print("result predictions from probability values count:")
+print(best_result_prediction.apply(pandas.value_counts), '\n')
+
+#print("result predictions from predict values count:")
+#print(best_prediction.apply(pandas.value_counts), '\n')
+#print("Check equality:",(best_prediction != best_result_prediction).any())
+
+
+# Отрисовка всех графиков предсказаний эмоций
+#x_range = range(0, len(Y_test))
+#for emotion in Y_test:
+#    DataCombatsPlot.plot_pred(x_range, Y_test.loc[:, emotion], predictions[emotion] , "Index", "Emotion: " + emotion)
+
+# Отрисовка графика предсказания эмоции по классам
+#DataCombatsPlot.plot_pred(x_range, get_multiclass_target(Y_test), get_multiclass_target(best_result_prediction) , "Index", "Emotions")
+
+# Отрисовка roc_auc
+#DataCombatsPlot.plot_roc_auc(columns_objects, best_prediction_probability, Y_test)
 '''
